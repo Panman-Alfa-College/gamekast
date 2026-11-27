@@ -70,10 +70,14 @@ async function api(path, params = {}) {
   return data;
 }
 
+const onRawg = u => {
+  try { const h = new URL(u).hostname; return h === 'rawg.io' || h.endsWith('.rawg.io'); } catch { return false; }
+};
 const toBlob = async u => {
   if (!u || u instanceof Blob) return u;
   try {
-    const r = await fetch('gamekast.php?action=img&url=' + encodeURIComponent(u));
+    // GitHub-raw mag de browser rechtstreeks ophalen; alleen RAWG loopt via de lokale proxy
+    const r = await (onRawg(u) ? fetch('gamekast.php?action=img&url=' + encodeURIComponent(u)) : fetch(u));
     if (!r.ok) throw 0;
     const b = await r.blob();
     if (!/^image\//.test(b.type)) throw 0; // geen afbeelding (bijv. PHP wordt niet uitgevoerd)
@@ -543,7 +547,36 @@ async function viewLiked(restore = false) {
 }
 
 // ---------- Games ophalen en in- of uit de favorieten zetten ----------
+// ---------- GitHub als spiegel van opgeslagen games ----------
+// Na `php sync.php` staan opgeslagen games ook in deze repo. Eerst daar kijken
+// kost geen RAWG-API-calls; alleen onbekende games gaan alsnog naar de API.
+const REPO_RAW = 'https://raw.githubusercontent.com/Panman-Alfa-College/gamekast/main';
+let repoIndex = null;
+async function repoFolder(id) {
+  if (repoIndex === null) {
+    try {
+      const r = await fetch(REPO_RAW + '/games/index.json');
+      repoIndex = r.ok ? await r.json() : {};
+    } catch { repoIndex = {}; }
+  }
+  return repoIndex[id] || '';
+}
+const fromInfo = (d, folder) => ({
+  id: d.id, name: d.naam, released: d.uitgebracht, rating: d.beoordeling, metacritic: d.metacritic,
+  genres: d.genres || [], platforms: d.platforms || [], developers: d.ontwikkelaars || [],
+  description: d.beschrijving || '', website: d.website || '', vanGithub: true,
+  cover: d.afbeeldingen?.cover ? `${REPO_RAW}/games/${folder}/${d.afbeeldingen.cover}` : '',
+  screenshots: (d.afbeeldingen?.screenshots || []).map(n => `${REPO_RAW}/games/${folder}/${n}`)
+});
+
 async function fetchGame(id) {
+  const folder = await repoFolder(id);
+  if (folder) {
+    try {
+      const r = await fetch(`${REPO_RAW}/games/${folder}/info.json`);
+      if (r.ok) return fromInfo(await r.json(), folder);
+    } catch { } // GitHub onbereikbaar of game er niet in: gewoon de API proberen
+  }
   const [d, s] = await Promise.all([api('/games/' + id), api(`/games/${id}/screenshots`)]);
   return {
     id: d.id, name: d.name, released: d.released, rating: d.rating, metacritic: d.metacritic,
@@ -611,7 +644,7 @@ ${g.cover ? `<img src="${esc(src(g.cover))}" alt="" class="absolute inset-0 h-fu
 <div class="absolute inset-x-0 bottom-0 flex flex-wrap items-end justify-between gap-3 p-5">
   <div>
     <h1 class="font-display text-3xl font-extrabold sm:text-4xl">${esc(g.name)}</h1>
-    ${local ? '<p class="mt-1 text-sm text-gold">Geladen uit je lokale opslag</p>' : ''}
+    ${local ? '<p class="mt-1 text-sm text-gold">Geladen uit je lokale opslag</p>' : g.vanGithub ? '<p class="mt-1 text-sm text-gold">Geladen van GitHub (geen API-call)</p>' : ''}
   </div>
   <button id="like"></button>
 </div>

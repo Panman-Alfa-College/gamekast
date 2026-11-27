@@ -8,6 +8,7 @@ const ls = {
 };
 const loader = '<p class="animate-pulse py-20 text-center text-mute">Laden…</p>';
 let KEY = ls.get('rawg_key') || '';
+let GHTOKEN = ls.get('gh_token') || '';
 let liked = new Set();
 let prev = () => viewSearch('');
 let plat = '', favPlat = '', favSort = 'new', query = '', mainSort = 'rel', nav = 0, feedState = null, feedCleanup = () => {};
@@ -98,10 +99,14 @@ const ext = x => ({ 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif'
 
 // Bestanden per game: info.json, cover en screenshots
 function filesFor(g) {
-  const files = [], imgs = { cover: null, screenshots: [] };
+  const files = [], imgs = { cover: null, screenshots: [] }, miss = [];
   if (g.cover instanceof Blob) { imgs.cover = 'cover.' + ext(g.cover); files.push({ name: imgs.cover, data: g.cover }); }
+  else if (typeof g.cover === 'string' && g.cover) miss.push({ url: g.cover, doel: 'cover' });
   g.screenshots.forEach((x, i) => {
-    if (!(x instanceof Blob)) return;
+    if (!(x instanceof Blob)) {
+      if (typeof x === 'string' && x) miss.push({ url: x, doel: `screenshot-${String(i + 1).padStart(2, '0')}` });
+      return;
+    }
     const n = `screenshot-${String(i + 1).padStart(2, '0')}.${ext(x)}`;
     imgs.screenshots.push(n); files.push({ name: n, data: x });
   });
@@ -110,7 +115,7 @@ function filesFor(g) {
     genres: g.genres, platforms: g.platforms, ontwikkelaars: g.developers,
     beschrijving: g.description, website: g.website,
     afbeeldingen: imgs,
-    nietGedownload: [g.cover, ...g.screenshots].filter(x => typeof x === 'string'),
+    nietGedownload: miss,
     opgeslagenOp: new Date(g.savedAt || Date.now()).toISOString()
   };
   files.push({ name: 'info.json', data: new Blob([JSON.stringify(info, null, 2)], { type: 'application/json' }) });
@@ -150,18 +155,24 @@ function viewKey() {
   ++nav;
   resetUrls();
   app.innerHTML = `<div class="mx-auto max-w-lg rounded-2xl border border-edge bg-panel p-6">
-<h2 class="mb-2 font-display text-2xl font-extrabold">Stel je API-sleutel in</h2>
+<h2 class="mb-2 font-display text-2xl font-extrabold">Sleutels</h2>
 <p class="mb-4 text-sm leading-relaxed text-mute">Gamekast haalt games op via de gratis
-  <a class="text-gold underline" href="https://rawg.io/apidocs" target="_blank" rel="noopener">RAWG API</a>.
-  Maak daar een account, kopieer je sleutel en plak die hieronder. De sleutel blijft alleen in deze browser.</p>
-<form id="keyForm" class="flex gap-2">
-  <input id="keyIn" value="${esc(KEY)}" placeholder="Plak je RAWG API-sleutel" aria-label="API-sleutel"
-    class="flex-1 rounded-lg border border-edge bg-night px-3 py-2">
-  <button class="rounded-lg bg-gold px-4 py-2 font-semibold text-night">Opslaan</button>
+  <a class="text-gold underline" href="https://rawg.io/apidocs" target="_blank" rel="noopener">RAWG API</a>:
+  maak daar een account en plak je sleutel hieronder. Voor het synchroniseren van favorieten en afbeeldingen
+  naar deze repo maak je op <a class="text-gold underline" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">GitHub</a>
+  een token met alleen deze repository en de machtiging <em>Contents: Read and write</em>.
+  Beide blijven alleen in deze browser.</p>
+<form id="keyForm" class="flex flex-col gap-2">
+  <input id="keyIn" value="${esc(KEY)}" placeholder="RAWG API-sleutel" aria-label="RAWG API-sleutel"
+    class="rounded-lg border border-edge bg-night px-3 py-2">
+  <input id="ghIn" value="${esc(GHTOKEN)}" placeholder="GitHub-token (optioneel, voor synchroniseren)" aria-label="GitHub-token"
+    class="rounded-lg border border-edge bg-night px-3 py-2">
+  <button class="self-start rounded-lg bg-gold px-4 py-2 font-semibold text-night">Opslaan</button>
 </form></div>`;
   $('#keyForm').onsubmit = e => {
     e.preventDefault();
     KEY = $('#keyIn').value.trim(); ls.set('rawg_key', KEY); apiCache.clear();
+    GHTOKEN = $('#ghIn').value.trim(); ls.set('gh_token', GHTOKEN);
     KEY ? viewSearch('') : viewKey();
   };
 }
@@ -546,19 +557,74 @@ async function viewLiked(restore = false) {
   page.setItems(view(), undefined, restore && feedState && feedState.key === 'fav' ? feedState : null);
 }
 
+async function saveToGitHub(g) {
+  const folder = folderName(g);
+  for (const f of filesFor(g)) {
+    await ghPut(`games/${folder}/${f.name}`, f.data, `Game opgeslagen: ${g.name}`);
+  }
+  await pushFavorieten('Favoriet toegevoegd: ' + g.name);
+  return folder;
+}
+
 // ---------- Games ophalen en in- of uit de favorieten zetten ----------
-// ---------- GitHub als spiegel van opgeslagen games ----------
-// Na `php sync.php` staan opgeslagen games ook in deze repo. Eerst daar kijken
-// kost geen RAWG-API-calls; alleen onbekende games gaan alsnog naar de API.
+// ---------- GitHub als opslag en spiegel ----------
+// Met een GitHub-token schrijft de app favorieten en afbeeldingen zelf weg in deze repo,
+// vanaf elk apparaat. Zonder token wordt alleen gelezen (openbare repo) en kan lokaal
+// via gamekast.php worden opgeslagen. Eerst in de repo kijken kost sowieso geen RAWG-API-calls.
 const REPO_RAW = 'https://raw.githubusercontent.com/Panman-Alfa-College/gamekast/main';
+const GH_API = 'https://api.github.com/repos/Panman-Alfa-College/gamekast/contents/';
+const ghAuth = () => GHTOKEN
+  ? { Authorization: 'Bearer ' + GHTOKEN, Accept: 'application/vnd.github+json' }
+  : { Accept: 'application/vnd.github+json' };
+
+// JSON uit de repo lezen: raw.githubusercontent (geen token, geen API-rate-limit),
+// anders de Contents-API met token (werkt ook bij een privérepo)
+async function ghReadJSON(path) {
+  try {
+    const r = await fetch(REPO_RAW + '/' + path);
+    if (r.ok) return await r.json();
+  } catch { }
+  if (GHTOKEN) {
+    try {
+      const r = await fetch(GH_API + path, { headers: ghAuth() });
+      if (r.ok) {
+        const d = await r.json();
+        return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(d.content.replace(/\n/g, '')), c => c.charCodeAt(0))));
+      }
+    } catch { }
+  }
+  return null;
+}
+
+// Bestand in de repo wegschrijven (Contents-API); data is een string, ArrayBuffer of Blob
+async function ghPut(path, data, bericht, poging = 0) {
+  const buf = data instanceof Blob ? await data.arrayBuffer() : data;
+  const u = typeof buf === 'string' ? new TextEncoder().encode(buf) : new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+  const head = await fetch(GH_API + path, { headers: ghAuth() });
+  const body = { message: bericht, content: btoa(s) };
+  if (head.ok) body.sha = (await head.json()).sha;
+  const r = await fetch(GH_API + path, {
+    method: 'PUT',
+    headers: { ...ghAuth(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (r.status === 409 && poging < 1) return ghPut(path, data, bericht, poging + 1); // sha intussen verouderd
+  if (!r.ok) {
+    const d = await r.json().catch(() => null);
+    throw new Error(d && d.message ? 'HTTP ' + r.status + ': ' + d.message : 'HTTP ' + r.status);
+  }
+}
+
+async function pushFavorieten(bericht) {
+  if (!GHTOKEN) throw new Error('geen GitHub-token ingesteld');
+  await ghPut('games/favorieten.json', JSON.stringify([...liked].sort((a, b) => a - b)), bericht);
+}
+
 let repoIndex = null;
 async function repoFolder(id) {
-  if (repoIndex === null) {
-    try {
-      const r = await fetch(REPO_RAW + '/games/index.json');
-      repoIndex = r.ok ? await r.json() : {};
-    } catch { repoIndex = {}; }
-  }
+  if (repoIndex === null) repoIndex = (await ghReadJSON('games/index.json')) || {};
   return repoIndex[id] || '';
 }
 const fromInfo = (d, folder) => ({
@@ -572,10 +638,8 @@ const fromInfo = (d, folder) => ({
 async function fetchGame(id) {
   const folder = await repoFolder(id);
   if (folder) {
-    try {
-      const r = await fetch(`${REPO_RAW}/games/${folder}/info.json`);
-      if (r.ok) return fromInfo(await r.json(), folder);
-    } catch { } // GitHub onbereikbaar of game er niet in: gewoon de API proberen
+    const d = await ghReadJSON(`games/${folder}/info.json`);
+    if (d) return fromInfo(d, folder);
   }
   const [d, s] = await Promise.all([api('/games/' + id), api(`/games/${id}/screenshots`)]);
   return {
@@ -588,18 +652,26 @@ async function fetchGame(id) {
   };
 }
 
-// Zet een game in of uit de favorieten (bestanden op schijf blijven bij uitliken staan)
+// Zet een game in of uit de favorieten (de gamemap op GitHub blijft bij uitliken staan)
 async function toggleLike(g) {
   if (liked.has(g.id)) {
     await dbDel(g.id); liked.delete(g.id);
-    toast('Verwijderd uit je favorieten. Bestanden op schijf blijven staan.');
+    let extra = '';
+    try { await pushFavorieten('Favoriet verwijderd'); }
+    catch (e) { extra = ' GitHub niet bijgewerkt: ' + e.message + '.'; }
+    toast('Verwijderd uit je favorieten. De map in games/ blijft staan.' + extra);
   } else {
     const saved = await saveLocal(g);
     await dbPut(saved); liked.add(g.id);
-    const note = saved.offline ? '' : ' Let op: sommige afbeeldingen konden niet worden gedownload.';
+    const note = saved.offline ? '' : ' Let op: sommige afbeeldingen konden niet worden gedownload; draai php sync.php om ze alsnog op te halen.';
     let msg;
-    try { msg = `Opgeslagen op de server in games/${await saveToServer(saved)}.`; }
-    catch (err) { msg = 'Opgeslagen in de browser, maar niet op de server: ' + err.message + '.'; }
+    if (GHTOKEN) {
+      try { await saveToGitHub(saved); msg = `Opgeslagen op GitHub in games/${folderName(saved)}.`; }
+      catch (err) { msg = 'Opgeslagen in je browser, maar niet op GitHub: ' + err.message + '.'; }
+    } else {
+      try { msg = `Opgeslagen op de server in games/${await saveToServer(saved)}.`; }
+      catch (err) { msg = 'Opgeslagen in je browser, maar niet op de server: ' + err.message + '.'; }
+    }
     toast(msg + note);
   }
   updateCount();
@@ -729,9 +801,26 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Tab' && !$('#lightbox').classList.contains('hidden')) e.preventDefault();
 });
 
+// Neemt een favoriet uit de repo op in de lokale opslag, zodat hij overal verder werkt
+async function adopt(id) {
+  if (await dbGet(id).catch(() => null)) return;
+  const folder = await repoFolder(id);
+  if (!folder) return;
+  const d = await ghReadJSON(`games/${folder}/info.json`);
+  if (d) await dbPut(fromInfo(d, folder));
+}
+
 (async () => {
-  try { liked = new Set(((await dbAll()) || []).map(g => g.id)); } catch { }
+  const lokaal = (await dbAll().catch(() => [])) || [];
+  liked = new Set(lokaal.map(g => g.id));
   updateCount();
+  const remote = await ghReadJSON('games/favorieten.json');
+  if (Array.isArray(remote)) {
+    const nieuw = remote.filter(id => !liked.has(id));
+    liked = new Set([...remote, ...liked]);
+    updateCount();
+    await Promise.all(nieuw.map(id => adopt(id).catch(() => { })));
+  }
   KEY ? viewSearch('') : viewKey();
 })();
   

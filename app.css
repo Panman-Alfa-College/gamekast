@@ -1,0 +1,15 @@
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+a:focus-visible {
+  outline: 2px solid #ffc145;
+  outline-offset: 2px;
+}
+.favGame.act { background: #14122b; color: #ffc145; font-weight: 600; box-shadow: inset 3px 0 0 #ffc145; }
+.thumb { opacity: .55; transition: opacity .15s; }
+.thumb:hover { opacity: .85; }
+.thumb.on { opacity: 1; box-shadow: 0 0 0 2px #ffc145; }
+.nav { opacity: 0; transition: opacity .15s; }
+.hero:hover .nav, .nav:focus-visible { opacity: 1; }
+.nav:disabled { opacity: 0 !important; pointer-events: none; }
+@media (hover: none) { .nav { opacity: 1; } }

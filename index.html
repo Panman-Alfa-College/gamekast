@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="nl">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Gamekast</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;800&family=Figtree:wght@400;500;600&display=swap"
+    rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { display: ['"Bricolage Grotesque"', 'system-ui', 'sans-serif'], sans: ['Figtree', 'system-ui', 'sans-serif'] },
+          colors: { night: '#14122b', panel: '#1e1b3f', edge: '#342f66', mute: '#a29dd1', gold: '#ffc145', coral: '#ff5d73' }
+        }
+      }
+    };
+  </script>
+  <link rel="stylesheet" href="app.css">
+</head>
+
+<body class="min-h-screen bg-night font-sans text-[#ece9ff]">
+
+  <header class="sticky top-0 z-20 border-b border-edge bg-night/95 backdrop-blur">
+    <div class="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-4 py-3">
+      <button id="home" class="font-display text-2xl font-extrabold text-gold">Gamekast</button>
+      <form id="searchForm" class="flex min-w-[200px] flex-1 gap-2">
+        <input id="q" type="search" placeholder="Zoek een game, bijvoorbeeld Zelda" aria-label="Zoek een game"
+          class="flex-1 rounded-lg border border-edge bg-panel px-3 py-2 placeholder:text-mute">
+        <button class="rounded-lg bg-gold px-4 py-2 font-semibold text-night hover:brightness-110">Zoeken</button>
+      </form>
+      <button id="navLiked" class="rounded-lg border border-edge px-3 py-2 hover:bg-panel">
+        Favorieten <span id="count" class="ml-1 rounded bg-coral/20 px-1.5 text-sm text-coral">0</span>
+      </button>
+      <button id="keyBtn" class="rounded-lg border border-edge px-3 py-2 text-mute hover:bg-panel">API-sleutel</button>
+    </div>
+  </header>
+
+  <main id="app" class="mx-auto max-w-6xl px-4 py-6"></main>
+
+  <div id="lightbox" role="dialog" aria-modal="true" aria-label="Vergrote screenshot" tabindex="-1"
+    class="fixed inset-0 z-50 hidden cursor-zoom-out items-center justify-center bg-black/90 p-4">
+    <img id="lbImg" alt="" class="max-h-full max-w-full rounded-lg">
+  </div>
+  <div id="toast"
+    class="fixed bottom-4 left-1/2 z-50 hidden max-w-[90vw] -translate-x-1/2 rounded-lg border border-edge bg-panel px-4 py-2 text-sm">
+  </div>
+
+  <script src="app.js"></script>
+</body>
+
+</html>
